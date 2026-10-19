@@ -1,0 +1,365 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================================
+// NEXTAUTH, INVITE-ONLY ADMISSION & AUDIT LOG MODELS
+// ============================================================================
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model PasswordCredential {
+  id                String    @id @default(cuid())
+  userId            String    @unique
+  passwordHash      String
+  passwordChangedAt DateTime  @default(now())
+  resetTokenHash    String?   @unique
+  resetExpiresAt    DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([resetExpiresAt])
+}
+
+model PendingRegistration {
+  id              String   @id @default(cuid())
+  email           String
+  normalizedEmail String   @unique
+  name            String?
+  passwordHash    String
+  tokenHash       String   @unique
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+model AccountInvitation {
+  id              String    @id @default(cuid())
+  email           String
+  normalizedEmail String
+  activeForEmail  String?   @unique
+  tokenHash       String?   @unique
+  role            String    @default("Editor") // "Admin" | "Editor" | "Viewer"
+  status          String    @default("PENDING") // "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED"
+  invitedById     String?
+  acceptedById    String?
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
+
+  invitedBy  User?                @relation("AccountInvitationInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+  acceptedBy User?                @relation("AccountInvitationAcceptor", fields: [acceptedById], references: [id], onDelete: SetNull)
+  emails     AccountEmailOutbox[]
+
+  @@index([status, expiresAt])
+  @@index([normalizedEmail, createdAt])
+  @@index([invitedById])
+  @@index([acceptedById])
+}
+
+model AccountEmailOutbox {
+  id            String    @id @default(cuid())
+  payload       String
+  status        String    @default("pending")
+  claimToken    String?
+  lastAttemptAt DateTime?
+  lastError     String?
+  sentAt        DateTime?
+  expiresAt     DateTime
+  createdAt     DateTime  @default(now())
+  invitationId  String?
+
+  invitation AccountInvitation? @relation(fields: [invitationId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([invitationId])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorId      String?
+  actorEmail   String?
+  actorRole    String?
+  action       String
+  targetType   String?
+  targetId     String?
+  metadataJson String   @default("{}")
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([action, createdAt])
+  @@index([actorId])
+}
+
+// ============================================================================
+// USER, TEAM, SOCIAL SETS, DRAFTS, QUEUE, COMMENTS, AI & ANALYTICS MODELS
+// ============================================================================
+
+model User {
+  id                  String    @id @default(cuid())
+  email               String    @unique
+  emailVerified       DateTime?
+  name                String    @default("Fabrizio Rinaldi")
+  image               String?
+  role                String    @default("Admin") // "Admin" | "Editor" | "Viewer"
+  status              String    @default("active") // "active" | "disabled"
+  passwordHash        String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  accounts                   Account[]
+  sessions                   Session[]
+  passwordCredential         PasswordCredential?
+  accountInvitationsSent     AccountInvitation[] @relation("AccountInvitationInviter")
+  accountInvitationsAccepted AccountInvitation[] @relation("AccountInvitationAcceptor")
+  auditLogs                  AuditLog[]
+  teamMemberships            TeamMember[]
+  socialSets                 SocialSet[]
+  drafts                     Draft[]
+  apiKeys                    ApiKey[]
+}
+
+model Team {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  color     String   @default("#4F46E5")
+  planTier  String   @default("BUSINESS") // "FREE" | "CREATOR" | "BUSINESS"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members    TeamMember[]
+  socialSets SocialSet[]
+}
+
+model TeamMember {
+  id       String   @id @default(cuid())
+  teamId   String
+  userId   String
+  role     String   @default("Admin") // "Admin" | "Editor" | "Viewer"
+  joinedAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+}
+
+model SocialSet {
+  id                  Int      @id @default(autoincrement())
+  username            String   @unique
+  name                String
+  bio                 String   @default("Write, schedule & publish on X, LinkedIn, Threads, Bluesky & Mastodon.")
+  profileImageUrl     String?
+  teamId              String?
+  ownerId             String?
+  timezone            String   @default("America/New_York")
+  platformsJson       String   @default("{}")
+  queueRulesJson      String   @default("[]")
+  voiceProfileJson    String   @default("{}")
+  streakDays          Int      @default(14)
+  bestStreakDays      Int      @default(42)
+  streakGoalPerWeek   Int      @default(5)
+  monthlyQuotaLimit   Int      @default(1500)
+  monthlyQuotaUsed    Int      @default(39)
+  analyticsSummaryJson String  @default("{}")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  team       Team?             @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  owner      User?             @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  drafts     Draft[]
+  tags       Tag[]
+  media      MediaAsset[]
+  aiPrompts  AiPromptCommand[]
+  webhooks   WebhookEndpoint[]
+}
+
+model Draft {
+  id                        Int       @id @default(autoincrement())
+  socialSetId               Int
+  createdById               String?
+  draftTitle                String?
+  status                    String    @default("draft") // "draft" | "planned" | "scheduled" | "publishing" | "published" | "error"
+  publishState              String?   // null | "in_progress" | "finished"
+  isPinned                  Boolean   @default(false)
+  shareToken                String    @unique @default(cuid())
+  isPubliclyShared          Boolean   @default(true)
+  previewText               String    @default("")
+  scratchpadText            String    @default("")
+  tagsJson                  String    @default("[]")
+  postsJson                 String    @default("[]")
+  platformsJson             String    @default("{}")
+  pollJson                  String?
+  xSettingsJson             String    @default("{}")
+  linkedinSettingsJson      String    @default("{}")
+  threadsSettingsJson       String    @default("{}")
+  autoPlugJson              String    @default("{}")
+  autoRepostJson            String    @default("{}")
+  autoDmJson                String    @default("{}")
+  threadFinisherJson        String    @default("{}")
+  numberingStyle            String    @default("none") // "none" | "1/n" | "1." | "[1/n]" | "thread_emoji"
+  backupsJson               String    @default("[]")
+  metricsJson               String    @default("{}")
+  scheduledDate             DateTime?
+  publishedAt               DateTime?
+  xPublishedUrl             String?
+  linkedinPublishedUrl      String?
+  mastodonPublishedUrl      String?
+  threadsPublishedUrl       String?
+  blueskyPublishedUrl       String?
+  substackPublishedUrl      String?
+  xArticlePublishedUrl      String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  socialSet      SocialSet       @relation(fields: [socialSetId], references: [id], onDelete: Cascade)
+  createdBy      User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  commentThreads CommentThread[]
+
+  @@index([socialSetId, status])
+  @@index([scheduledDate])
+}
+
+model Tag {
+  id          String   @id @default(cuid())
+  socialSetId Int
+  slug        String
+  name        String
+  color       String   @default("#4F46E5")
+  createdAt   DateTime @default(now())
+
+  socialSet SocialSet @relation(fields: [socialSetId], references: [id], onDelete: Cascade)
+
+  @@unique([socialSetId, slug])
+}
+
+model CommentThread {
+  id           String   @id @default(cuid())
+  draftId      Int
+  platform     String   @default("x")
+  postIndex    Int      @default(0)
+  selectedText String?
+  status       String   @default("unresolved") // "unresolved" | "resolved"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  draft    Draft     @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  comments Comment[]
+
+  @@index([draftId])
+}
+
+model Comment {
+  id          String   @id @default(cuid())
+  threadId    String
+  authorId    String?
+  authorName  String
+  authorEmail String
+  text        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  thread CommentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+}
+
+model MediaAsset {
+  id          String   @id @default(cuid())
+  socialSetId Int
+  fileName    String
+  mimeType    String   @default("image/png")
+  url         String
+  altText     String   @default("")
+  status      String   @default("ready") // "uploading" | "ready" | "error"
+  createdAt   DateTime @default(now())
+
+  socialSet SocialSet @relation(fields: [socialSetId], references: [id], onDelete: Cascade)
+}
+
+model AiPromptCommand {
+  id          String   @id @default(cuid())
+  socialSetId Int
+  label       String
+  slug        String
+  icon        String   @default("Sparkles")
+  instruction String
+  isEnabled   Boolean  @default(true)
+  isBuiltIn   Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  socialSet SocialSet @relation(fields: [socialSetId], references: [id], onDelete: Cascade)
+}
+
+model WebhookEndpoint {
+  id              String    @id @default(cuid())
+  socialSetId     Int
+  name            String
+  url             String
+  eventsJson      String    @default("[\"draft.created\",\"draft.scheduled\",\"draft.planned\",\"draft.published\"]")
+  secret          String
+  isActive        Boolean   @default(true)
+  lastTriggeredAt DateTime?
+  createdAt       DateTime  @default(now())
+
+  socialSet SocialSet @relation(fields: [socialSetId], references: [id], onDelete: Cascade)
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String
+  keyPrefix  String
+  keyHash    String    @unique
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

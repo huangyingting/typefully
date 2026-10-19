@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: typefully
+      POSTGRES_PASSWORD: typefully_prod_password
+      POSTGRES_DB: typefully_prod
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U typefully -d typefully_prod"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql://typefully:typefully_prod_password@postgres:5432/typefully_prod?schema=public"
+      NEXTAUTH_URL: "http://localhost:3000"
+      NEXTAUTH_SECRET: "replace-with-strong-production-secret"
+      NEXT_PUBLIC_APP_URL: "http://localhost:3000"
+      ACCOUNT_ADMISSION_MODE: "invitation-only"
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:
